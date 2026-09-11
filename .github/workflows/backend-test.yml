@@ -1,0 +1,170 @@
+name: Backend Test
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: backend-test-pr-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  authorize:
+    name: Authorize /test
+    if: github.event.issue.pull_request && contains(github.event.comment.body, '/test')
+    runs-on: ubuntu-latest
+    outputs:
+      should_test: ${{ steps.gate.outputs.should_test }}
+      checkout_ref: ${{ steps.gate.outputs.checkout_ref }}
+      head_ref: ${{ steps.gate.outputs.head_ref }}
+    steps:
+      - name: Validate comment and PR
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          ASSOCIATION: ${{ github.event.comment.author_association }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENTER: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+
+          echo "should_test=false" >> "${GITHUB_OUTPUT}"
+
+          body="$(jq -r '.comment.body' "${GITHUB_EVENT_PATH}")"
+          if ! grep -qiE '^[[:space:]]*/test([[:space:]]|$)' <<<"${body}"; then
+            echo "Comment is not a /test command"
+            exit 0
+          fi
+
+          comment() {
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="$1" >/dev/null
+          }
+
+          case "${ASSOCIATION}" in
+            OWNER|MEMBER|COLLABORATOR) ;;
+            *)
+              echo "Ignoring /test from ${ASSOCIATION}"
+              comment "@${COMMENTER} ignoring \`/test\`: only repo collaborators can run tests."
+              exit 0
+              ;;
+          esac
+
+          pr="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}")"
+          state="$(jq -r '.state' <<<"${pr}")"
+          head_sha="$(jq -r '.head.sha' <<<"${pr}")"
+          head_ref="$(jq -r '.head.ref' <<<"${pr}")"
+          head_repo="$(jq -r '.head.repo.full_name' <<<"${pr}")"
+          base_repo="$(jq -r '.base.repo.full_name' <<<"${pr}")"
+
+          if [ "${state}" != "open" ]; then
+            echo "PR #${PR_NUMBER} is ${state}; skipping"
+            comment "@${COMMENTER} ignoring \`/test\`: PR is ${state}."
+            exit 0
+          fi
+
+          if [ "${head_repo}" != "${base_repo}" ]; then
+            echo "Refusing to test fork PR ${head_repo}"
+            comment "@${COMMENTER} ignoring \`/test\`: fork PRs cannot run tests."
+            exit 0
+          fi
+
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}/reactions" \
+            -f content=rocket \
+            >/dev/null
+
+          {
+            echo "should_test=true"
+            echo "checkout_ref=${head_sha}"
+            echo "head_ref=${head_ref}"
+          } >> "${GITHUB_OUTPUT}"
+
+      - name: Comment that tests are starting
+        if: steps.gate.outputs.should_test == 'true'
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: backend-test
+          number: ${{ github.event.issue.number }}
+          message: |
+            Running tests from `${{ steps.gate.outputs.head_ref }}` (`${{ steps.gate.outputs.checkout_ref }}`).
+            Requested by @${{ github.event.comment.user.login }}.
+
+            [View workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+  test:
+    name: go test + vet
+    needs: authorize
+    if: needs.authorize.outputs.should_test == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    env:
+      DATABASE_URL: postgresql://root@localhost:26257/defaultdb?sslmode=disable
+      MONGO_URI: mongodb://localhost:27017/financy?directConnection=true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.authorize.outputs.checkout_ref }}
+
+      - name: Start CockroachDB and MongoDB
+        run: |
+          set -euo pipefail
+
+          docker run -d --name crdb -p 26257:26257 \
+            docker.io/cockroachdb/cockroach:latest-v26.3 \
+            start-single-node --insecure
+          docker run -d --name mongo -p 27017:27017 docker.io/library/mongo:7
+
+          wait_for() {
+            local name="$1"
+            shift
+            for _ in $(seq 1 30); do
+              if docker exec "$name" "$@" >/dev/null 2>&1; then
+                return 0
+              fi
+              sleep 2
+            done
+            echo "${name} did not become ready" >&2
+            docker logs "$name"
+            return 1
+          }
+
+          wait_for crdb ./cockroach sql --insecure --execute='SELECT 1'
+          wait_for mongo mongosh --quiet --eval 'db.runCommand({ ping: 1 })'
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -count=1 -timeout 15m
+
+      - name: Comment test result
+        if: always()
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: backend-test
+          number: ${{ github.event.issue.number }}
+          message: |
+            ${{ job.status == 'success' && 'Tests passed.' || 'Tests failed.' }}
+
+            - Branch: `${{ needs.authorize.outputs.head_ref }}`
+            - SHA: `${{ needs.authorize.outputs.checkout_ref }}`
+
+            [View workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})

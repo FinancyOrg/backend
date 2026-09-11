@@ -1,0 +1,92 @@
+name: Check Semver Update
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+jobs:
+  check-semver:
+    name: Check Semver
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Get base version
+        id: base
+        run: |
+          set -euo pipefail
+
+          git fetch --tags --force
+          LATEST_TAG=$(git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+          if [ -z "$LATEST_TAG" ]; then
+            echo "No version tags found, falling back to base branch VERSION"
+            git fetch origin "${{ github.event.pull_request.base.ref }}"
+            if git cat-file -e "origin/${{ github.event.pull_request.base.ref }}:VERSION" 2>/dev/null; then
+              BASE_VERSION=$(git show "origin/${{ github.event.pull_request.base.ref }}:VERSION" | tr -d '[:space:]')
+            else
+              echo "Could not find version in base branch VERSION either, defaulting to 0.0.0"
+              BASE_VERSION="0.0.0"
+            fi
+          else
+            # Remove potential 'v' prefix
+            BASE_VERSION=${LATEST_TAG#v}
+            echo "Base version from latest tag: $BASE_VERSION"
+          fi
+          echo "base_version=$BASE_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Get head version
+        id: head
+        run: |
+          set -euo pipefail
+
+          HEAD_VERSION=$(tr -d '[:space:]' < VERSION)
+          echo "Head version from VERSION: $HEAD_VERSION"
+          echo "head_version=$HEAD_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Auto-increment patch version if needed
+        run: |
+          set -euo pipefail
+
+          BASE_VERSION="${{ steps.base.outputs.base_version }}"
+          HEAD_VERSION="${{ steps.head.outputs.head_version }}"
+
+          NEW_VERSION=$HEAD_VERSION
+
+          IFS='.' read -r base_major base_minor base_patch <<< "$BASE_VERSION"
+          IFS='.' read -r head_major head_minor head_patch <<< "$HEAD_VERSION"
+
+          if ! ([ "$head_major" -gt "$base_major" ] || \
+                ([ "$head_major" -eq "$base_major" ] && [ "$head_minor" -gt "$base_minor" ]) || \
+                ([ "$head_major" -eq "$base_major" ] && [ "$head_minor" -eq "$base_minor" ] && [ "$head_patch" -gt "$base_patch" ])); then
+
+            echo "HEAD version ($HEAD_VERSION) is not ahead of BASE version ($BASE_VERSION)."
+
+            new_patch=$((base_patch + 1))
+            NEW_VERSION="${base_major}.${base_minor}.${new_patch}"
+
+            printf '%s\n' "$NEW_VERSION" > VERSION
+
+            git config --local user.email "github-actions[bot]@users.noreply.github.com"
+            git config --local user.name "github-actions[bot]"
+            git add VERSION
+            if ! git diff --staged --quiet; then
+              git commit -m "chore: auto-increment patch version to $NEW_VERSION"
+              git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+              echo "Auto-incremented version from $HEAD_VERSION to $NEW_VERSION"
+            else
+              echo "No changes to commit for auto-increment."
+            fi
+          else
+            echo "HEAD version ($HEAD_VERSION) is already ahead of BASE version ($BASE_VERSION). No auto-increment needed."
+          fi
