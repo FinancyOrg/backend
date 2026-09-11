@@ -107,53 +107,14 @@ jobs:
       contents: read
       pull-requests: write
 
-    env:
-      DATABASE_URL: postgresql://root@localhost:26257/defaultdb?sslmode=disable
-      MONGO_URI: mongodb://localhost:27017/financy?directConnection=true
-
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           ref: ${{ needs.authorize.outputs.checkout_ref }}
 
-      - name: Start CockroachDB and MongoDB
-        run: |
-          set -euo pipefail
-
-          docker run -d --name crdb -p 26257:26257 \
-            docker.io/cockroachdb/cockroach:latest-v26.3 \
-            start-single-node --insecure
-          docker run -d --name mongo -p 27017:27017 docker.io/library/mongo:7
-
-          wait_for() {
-            local name="$1"
-            shift
-            for _ in $(seq 1 30); do
-              if docker exec "$name" "$@" >/dev/null 2>&1; then
-                return 0
-              fi
-              sleep 2
-            done
-            echo "${name} did not become ready" >&2
-            docker logs "$name"
-            return 1
-          }
-
-          wait_for crdb ./cockroach sql --insecure --execute='SELECT 1'
-          wait_for mongo mongosh --quiet --eval 'db.runCommand({ ping: 1 })'
-
-      - name: Setup Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-
-      - name: Vet
-        run: go vet ./...
-
       - name: Test
-        run: go test ./... -count=1 -timeout 15m
+        uses: ./.github/actions/backend-test
 
       - name: Comment test result
         if: always()
