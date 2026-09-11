@@ -8,6 +8,11 @@ on:
       - opened
       - synchronize
       - reopened
+    paths-ignore:
+      - README.md
+      - docs/**
+      - '**/*.md'
+      - '.github/**'
 
 jobs:
   check-semver:
@@ -20,28 +25,22 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          fetch-tags: true
           ref: ${{ github.event.pull_request.head.ref }}
 
-      - name: Get base version
+      - name: Get latest repo tag
         id: base
         run: |
           set -euo pipefail
 
           git fetch --tags --force
-          LATEST_TAG=$(git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
+          LATEST_TAG=$(git tag --list '[0-9]*.[0-9]*.[0-9]*' --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)
           if [ -z "$LATEST_TAG" ]; then
-            echo "No version tags found, falling back to base branch VERSION"
-            git fetch origin "${{ github.event.pull_request.base.ref }}"
-            if git cat-file -e "origin/${{ github.event.pull_request.base.ref }}:VERSION" 2>/dev/null; then
-              BASE_VERSION=$(git show "origin/${{ github.event.pull_request.base.ref }}:VERSION" | tr -d '[:space:]')
-            else
-              echo "Could not find version in base branch VERSION either, defaulting to 0.0.0"
-              BASE_VERSION="0.0.0"
-            fi
+            echo "No version tags found, defaulting to 0.0.0"
+            BASE_VERSION="0.0.0"
           else
-            # Remove potential 'v' prefix
             BASE_VERSION=${LATEST_TAG#v}
-            echo "Base version from latest tag: $BASE_VERSION"
+            echo "Base version from latest repo tag ${LATEST_TAG}: ${BASE_VERSION}"
           fi
           echo "base_version=$BASE_VERSION" >> "$GITHUB_OUTPUT"
 
@@ -70,7 +69,7 @@ jobs:
                 ([ "$head_major" -eq "$base_major" ] && [ "$head_minor" -gt "$base_minor" ]) || \
                 ([ "$head_major" -eq "$base_major" ] && [ "$head_minor" -eq "$base_minor" ] && [ "$head_patch" -gt "$base_patch" ])); then
 
-            echo "HEAD version ($HEAD_VERSION) is not ahead of BASE version ($BASE_VERSION)."
+            echo "HEAD version ($HEAD_VERSION) is not ahead of latest repo tag ($BASE_VERSION). Incrementing."
 
             new_patch=$((base_patch + 1))
             NEW_VERSION="${base_major}.${base_minor}.${new_patch}"
@@ -88,5 +87,5 @@ jobs:
               echo "No changes to commit for auto-increment."
             fi
           else
-            echo "HEAD version ($HEAD_VERSION) is already ahead of BASE version ($BASE_VERSION). No auto-increment needed."
+            echo "HEAD version ($HEAD_VERSION) is already ahead of latest repo tag ($BASE_VERSION). Passing."
           fi
