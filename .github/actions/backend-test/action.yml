@@ -1,5 +1,5 @@
 name: Backend Test
-description: Start CockroachDB and MongoDB, then run go vet and go test
+description: Start CockroachDB and MongoDB from compose.yaml, then run go vet and go test
 
 runs:
   using: composite
@@ -9,27 +9,10 @@ runs:
       run: |
         set -euo pipefail
 
-        docker run -d --name crdb -p 26257:26257 \
-          docker.io/cockroachdb/cockroach:latest-v26.3 \
-          start-single-node --insecure
-        docker run -d --name mongo -p 27017:27017 docker.io/library/mongo:7
-
-        wait_for() {
-          local name="$1"
-          shift
-          for _ in $(seq 1 30); do
-            if docker exec "$name" "$@" >/dev/null 2>&1; then
-              return 0
-            fi
-            sleep 2
-          done
-          echo "${name} did not become ready" >&2
-          docker logs "$name"
-          return 1
+        docker compose -f compose.yaml up -d --wait --wait-timeout 120 crdb mongo || {
+          docker compose -f compose.yaml logs crdb mongo
+          exit 1
         }
-
-        wait_for crdb ./cockroach sql --insecure --execute='SELECT 1'
-        wait_for mongo mongosh --quiet --eval 'db.runCommand({ ping: 1 })'
 
         {
           echo "DATABASE_URL=postgresql://root@localhost:26257/defaultdb?sslmode=disable"

@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 concurrency:
@@ -25,6 +25,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-tags: true
 
       - name: Resolve image name and tag
         id: tag
@@ -62,18 +63,28 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
-      - name: Make package public
-        continue-on-error: true
+      - name: Create repo tag
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          IMAGE: ${{ steps.tag.outputs.image }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          package="${GITHUB_REPOSITORY##*/}"
-          owner="${GITHUB_REPOSITORY_OWNER}"
-          gh api --method PATCH \
-            "/orgs/${owner}/packages/container/${package}" \
-            -f visibility=public
+
+          git fetch --tags --force
+
+          if git rev-parse "refs/tags/${TAG}" >/dev/null 2>&1; then
+            existing="$(git rev-list -n 1 "refs/tags/${TAG}")"
+            current="$(git rev-parse HEAD)"
+            if [ "${existing}" = "${current}" ]; then
+              echo "Tag ${TAG} already points at ${current}"
+              exit 0
+            fi
+            echo "Tag ${TAG} already exists on ${existing}, not ${current}"
+            exit 1
+          fi
+
+          git tag "${TAG}"
+          git push origin "refs/tags/${TAG}"
+          echo "Created tag ${TAG}"
 
       - name: Summarize
         env:
@@ -82,6 +93,8 @@ jobs:
         run: |
           {
             echo "## Published ${IMAGE}:${TAG}"
+            echo
+            echo "Git tag: \`${TAG}\`"
             echo
             echo "Public pull:"
             echo
