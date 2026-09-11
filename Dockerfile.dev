@@ -1,0 +1,12 @@
+# Dev-only backend image: live reload via air (rebuilds and restarts the
+# server on .go changes). Used by compose.live-backend.yaml with the source
+# mounted at /src. Production builds use ./Dockerfile — keep this separate.
+# --build.poll: macOS bind mounts do not deliver file events into the Podman
+# VM, so fsnotify never fires. Vite already polls for the same reason
+# (CHOKIDAR_USEPOLLING in compose.live-frontend.yaml).
+FROM docker.io/library/golang:1.27-alpine
+WORKDIR /src
+RUN go install github.com/air-verse/air@v1.67.4
+COPY go.mod go.sum ./
+RUN go mod download
+CMD ["air", "--build.cmd", "go build -o /tmp/air/server ./cmd/server", "--build.bin", "/tmp/air/server", "--build.poll", "true", "--build.poll_interval", "500"]
