@@ -1,0 +1,71 @@
+services:
+  mongo:
+    image: docker.io/library/mongo:8
+    container_name: financy-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    # CMD-SHELL with quoting: podman-compose joins list-form tests into a
+    # shell string, which breaks --execute="SELECT 1" and mongo's parens.
+    healthcheck:
+      test: ["CMD-SHELL", "mongosh --quiet --eval 'db.runCommand({ ping: 1 })'"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  crdb:
+    image: docker.io/cockroachdb/cockroach:v26.3.0
+    container_name: financy-crdb
+    restart: unless-stopped
+    command:
+      - start-single-node
+      - --insecure
+      - --http-addr=0.0.0.0:8080
+    ports:
+      - "26257:26257"
+      - "8080:8080"
+    volumes:
+      - crdb-data:/cockroach/cockroach-data
+    healthcheck:
+      test: ["CMD-SHELL", "./cockroach sql --insecure --execute='SELECT 1'"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  # air polls .go files (macOS bind mounts do not deliver fsnotify).
+  # Readiness is probed from the host (wait_for_backend in the Makefile).
+  backend:
+    container_name: financy-backend
+    image: localhost/financy-backend:dev
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    environment:
+      ADDR: ":8081"
+      DATABASE_URL: postgresql://root@crdb:26257/defaultdb?sslmode=disable
+      MONGO_URI: mongodb://mongo:27017/financy?directConnection=true
+      SESSION_SECRET: local-dev-secret-not-for-production-use
+      OAUTH_CLIENT_ID: local-dev-placeholder.apps.googleusercontent.com
+      ALLOWED_USERS: dev@example.com
+      DEV_LOGIN: "1"
+    ports:
+      - "8081:8081"
+    volumes:
+      - .:/src
+      - go-build-cache:/root/.cache/go-build
+      - go-mod-cache:/go/pkg/mod
+    depends_on:
+      crdb:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+
+volumes:
+  mongo-data:
+  crdb-data:
+  go-build-cache:
+  go-mod-cache:
