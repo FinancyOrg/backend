@@ -137,6 +137,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
+	// Liveness only: do not open CRDB. Cloud Run SNAT deny must not fail health.
 	writeJSON(w, http.StatusOK, map[string]string{
 		"status":  "ok",
 		"version": version.String(),

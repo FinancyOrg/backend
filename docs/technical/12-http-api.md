@@ -15,6 +15,9 @@ Reports are in **functional currency \(F\)**. `reportingCommodityId` /
 | POST | `/api/auth/dev` (local only) |
 | POST | `/api/auth/logout` |
 
+`GET /api/health` is process liveness only. It does not open CRDB, so it
+stays 200 if the SQL proxy is refusing this instance.
+
 ## Config
 
 | Method | Path | Notes |
@@ -25,7 +28,10 @@ Reports are in **functional currency \(F\)**. `reportingCommodityId` /
 | GET/PUT | `/api/config/timezone` | Mongo. Civil calendar only ([14-time.md](14-time.md)). |
 
 `GET /api/config` returns 200 when \(F\) is unset (`commodityId: null`).
-The welcome screen uses that. `GET /api/config/default-currency` returns 409
+The welcome screen uses that. Session-gated config reads go through CRDB
+`app_config`; a Cockroach proxy deny (`08C00`) is recovered by re-allowlisting
+the instance SNAT `/32` and retrying once ([02-architecture.md](02-architecture.md)).
+`GET /api/config/default-currency` returns 409
 `FunctionalCurrencyNotSet` (keep mapping the old `PresentationCurrencyNotSet`
 / `DefaultCurrencyNotSet` codes if clients still send them).
 

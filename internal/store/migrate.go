@@ -7,18 +7,12 @@ import (
 	"io/fs"
 	"sort"
 	"strings"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 //go:embed migrations/*.sql
 var migrationFS embed.FS
 
-func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
-	return pgxpool.New(ctx, databaseURL)
-}
-
-func RunMigrations(ctx context.Context, pool *pgxpool.Pool) error {
+func RunMigrations(ctx context.Context, pool *Pool) error {
 	fsys, err := fs.Sub(migrationFS, "migrations")
 	if err != nil {
 		return err

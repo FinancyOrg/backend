@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -335,6 +336,7 @@ type listResult struct {
 }
 
 type fakeAPI struct {
+	mu       sync.Mutex
 	puts     []putCall
 	putErr   error
 	putResp  *http.Response
@@ -356,6 +358,8 @@ func (f *fakeAPI) AddAllowlistEntry2(_ context.Context, clusterId string, cidrIp
 		sql = entry.GetSql()
 		ui = entry.GetUi()
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.puts = append(f.puts, putCall{cluster: clusterId, ip: cidrIp, mask: cidrMask, name: name, sql: sql, ui: ui})
 	if len(f.putErrs) > 0 {
 		err := f.putErrs[0]
@@ -374,24 +378,41 @@ func (f *fakeAPI) ListAllowlistEntries(_ context.Context, _ string, options *cli
 	if options == nil {
 		return nil, nil, fmt.Errorf("ListAllowlistEntries options must not be nil")
 	}
+	f.mu.Lock()
 	i := f.listN
 	if i >= len(f.list) {
 		i = len(f.list) - 1
 	}
 	f.listN++
-	if f.onList != nil {
-		f.onList(f.listN)
-	}
+	n := f.listN
+	onList := f.onList
+	var r listResult
 	if i < 0 {
+		f.mu.Unlock()
+		if onList != nil {
+			onList(n)
+		}
 		return listResp(false), nil, nil
 	}
-	r := f.list[i]
+	r = f.list[i]
+	f.mu.Unlock()
+	if onList != nil {
+		onList(n)
+	}
 	return r.resp, r.http, r.err
 }
 
 func (f *fakeAPI) DeleteAllowlistEntry(_ context.Context, _ string, cidrIp string, cidrMask int32) (*client.AllowlistEntry, *http.Response, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.deletes = append(f.deletes, cidrCall{ip: cidrIp, mask: cidrMask})
 	return nil, nil, nil
+}
+
+func (f *fakeAPI) putCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.puts)
 }
 
 func listResp(propagating bool, entries ...client.AllowlistEntry) *client.ListAllowlistEntriesResponse {
