@@ -1,5 +1,6 @@
 // Package crdballowlist updates the CockroachDB Cloud SQL IP allowlist with
-// this process's current public egress address before DATABASE_URL is opened.
+// this process's current public egress address before DATABASE_URL is opened,
+// and again at request time if the SQL proxy later returns 08C00.
 //
 // Cloud Run SNAT addresses are shared and rotate per instance, so they must
 // not be pinned in Terraform. Local development leaves CRDB_API_KEY and
@@ -24,8 +25,9 @@ const (
 	cidrMask    = 32
 )
 
-// API is the CockroachDB Cloud IP-allowlist surface used at startup.
-// The official SDK's client.Service satisfies this interface.
+// API is the CockroachDB Cloud IP-allowlist surface used at startup and
+// during runtime Recover. The official SDK's client.Service satisfies this
+// interface.
 type API interface {
 	AddAllowlistEntry2(ctx context.Context, clusterId string, cidrIp string, cidrMask int32, entry *client.AllowlistEntry1) (*client.AllowlistEntry, *http.Response, error)
 	ListAllowlistEntries(ctx context.Context, clusterId string, options *client.ListAllowlistEntriesOptions) (*client.ListAllowlistEntriesResponse, *http.Response, error)
@@ -74,30 +76,6 @@ func NewAPI(apiKey string) API {
 	cfg := client.NewConfiguration(apiKey)
 	cfg.HTTPClient = &http.Client{Timeout: 15 * time.Second}
 	return client.NewService(client.NewClient(cfg))
-}
-
-// Run loads config from the environment and, when enabled, allowlists this
-// instance's egress /32, waits until the Cloud API reports the change has
-// propagated, then waits until TCP and SELECT now() against Cockroach succeed.
-func Run(ctx context.Context, getenv func(string) string) error {
-	cfg, err := LoadConfig(getenv)
-	if err != nil {
-		return err
-	}
-	if cfg == nil {
-		return nil
-	}
-	databaseURL := getenv("DATABASE_URL")
-	addr, err := sqlAddr(databaseURL)
-	if err != nil {
-		return err
-	}
-	ip, err := Ensure(ctx, NewAPI(cfg.APIKey), *cfg, Options{SQLAddr: addr, DatabaseURL: databaseURL})
-	if err != nil {
-		return err
-	}
-	log.Printf("crdb allowlist: %s/32 propagated; sql %s ready", ip, addr)
-	return nil
 }
 
 // Ensure discovers the current public IPv4, PUTs it as a /32 SQL allowlist

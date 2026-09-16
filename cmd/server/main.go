@@ -39,13 +39,17 @@ func main() {
 	verifier := auth.NewGoogleVerifier(oauthClientID)
 
 	ctx := context.Background()
-	startupCtx, startupCancel := context.WithTimeout(ctx, 100*time.Second)
+	startupCtx, startupCancel := context.WithTimeout(ctx, crdballowlist.DefaultTimeout)
 	defer startupCancel()
-	if err := crdballowlist.Run(startupCtx, os.Getenv); err != nil {
+	rec, err := crdballowlist.NewRecoverer(os.Getenv)
+	if err != nil {
+		log.Fatalf("crdb allowlist: %v", err)
+	}
+	if err := rec.Run(startupCtx); err != nil {
 		log.Fatalf("crdb allowlist: %v", err)
 	}
 
-	pool, err := store.Connect(ctx, databaseURL)
+	pool, err := store.Connect(ctx, databaseURL, rec)
 	if err != nil {
 		log.Fatalf("database: %v", err)
 	}

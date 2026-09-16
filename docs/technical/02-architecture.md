@@ -18,6 +18,14 @@ HTTP
 
 Empty `MONGO_URI`: Mongo is nil. Theme and timezone fall back to code defaults. Functional currency is still CRDB `app_config` (or an in-memory override in SQL-only tests). Cache is a no-op. Tests and `make backend` stay SQL-only.
 
+## Cockroach Cloud allowlist
+
+Production Cloud Run does not pin SNAT addresses in Terraform. `internal/crdballowlist` discovers this instance's public IPv4, PUTs it as a `/32` SQL-only entry named `cloudrun`, waits until the Cloud API reports propagation, then waits until TCP `:26257` and `SELECT now()` succeed. Stale `cloudrun*` entries are pruned; `laptop` and `0.0.0.0` are never deleted.
+
+`cmd/server` runs that sequence at startup (100s bound). After listen, if a later acquire fails with Cockroach proxy deny (`SQLSTATE 08C00` / `codeProxyRefusedConnection`) — SNAT rotation, or the startup ping racing proxy enforcement — the pgx pool wrapper in `internal/store` re-runs the same `Ensure` **once** (singleflight so concurrent `/api/config` calls share one Cloud API update), `Reset`s idle conns, and retries the query. Other SQL errors are not recovered. Local/dev leaves `CRDB_API_KEY` and `CRDB_CLUSTER_ID` unset: allowlist injection is a no-op and `08C00` is returned unchanged.
+
+`GET /api/health` does not touch CRDB, so liveness stays 200 while the proxy is refusing SQL.
+
 ## Authority
 
 | Question | Answer |
@@ -59,9 +67,10 @@ A snapshot is an output cache, like a rendered image. Recompute from CRDB on mis
 apps/backend/
   cmd/server/main.go
   internal/auth/          # copy
+  internal/crdballowlist/ # Cloud Run SQL IP allowlist (startup + 08C00 recover)
   internal/domain/        # money, posting, valuation, time
   internal/ledger/        # service; native journals, lots, views in F
-  internal/store/         # CRDB migrate + pgx
+  internal/store/         # CRDB migrate + pgx (recover-on-08C00 wrapper)
   internal/mongo/         # cache + store settings (today: internal/firestore)
   internal/httpapi/
 ```

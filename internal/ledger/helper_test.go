@@ -41,7 +41,7 @@ func testService(t *testing.T, fetch RateFetcher) (*Service, *pgxpool.Pool) {
 		admin.Close()
 	})
 
-	pool, err := store.Connect(ctx, rewriteDBName(adminURL, name))
+	pool, err := store.Connect(ctx, rewriteDBName(adminURL, name), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +49,11 @@ func testService(t *testing.T, fetch RateFetcher) (*Service, *pgxpool.Pool) {
 	if err := store.RunMigrations(ctx, pool); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	return New(pool, fetch), pool
+	inner := pool.Inner()
+	if inner == nil {
+		t.Fatal("expected pgx pool")
+	}
+	return New(pool, fetch), inner
 }
 
 func rewriteDBName(url, dbName string) string {

@@ -16,7 +16,7 @@ func main() {
 	if url == "" {
 		url = "postgresql://root@localhost:26257/defaultdb?sslmode=disable"
 	}
-	pool, err := store.Connect(ctx, url)
+	pool, err := store.Connect(ctx, url, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "connect: %v\n", err)
 		os.Exit(1)

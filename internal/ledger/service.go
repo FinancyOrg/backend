@@ -14,6 +14,7 @@ import (
 
 	"github.com/FinancyOrg/backend/internal/domain"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -119,8 +120,19 @@ type PostJournalEntryInput struct {
 	PostedAt      *string
 }
 
+// DB is the Cockroach surface ledger uses. *pgxpool.Pool and *store.Pool
+// both satisfy it.
+type DB interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+var _ DB = (*pgxpool.Pool)(nil)
+
 type Service struct {
-	db                   *pgxpool.Pool
+	db                   DB
 	cache                Cache
 	flags                AccountFlagsStore
 	settings             SettingsStore
@@ -139,7 +151,7 @@ type rateMemo struct {
 	err  error
 }
 
-func New(db *pgxpool.Pool, fetchEcbRate RateFetcher) *Service {
+func New(db DB, fetchEcbRate RateFetcher) *Service {
 	if fetchEcbRate == nil {
 		fetchEcbRate = FetchEcbRatePerEur
 	}

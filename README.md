@@ -44,7 +44,7 @@ make logs     # follow compose logs
 make down     # stop containers
 ```
 
-Copy `.env.example` if you run the server outside compose. `SESSION_SECRET` and `OAUTH_CLIENT_ID` are required in every environment; `ALLOWED_USERS` is the comma-separated Google account list.
+Copy `.env.example` if you run the server outside compose. `SESSION_SECRET` and `OAUTH_CLIENT_ID` are required in every environment; `ALLOWED_USERS` is the comma-separated Google account list. Production Cloud Run also sets `CRDB_API_KEY` and `CRDB_CLUSTER_ID` so the process can allowlist its current egress `/32`; leave both unset locally.
 
 ## Layout
 
@@ -53,7 +53,8 @@ cmd/server          HTTP process
 cmd/migrate         schema migrations
 internal/domain     money, lots, dates, valuation
 internal/ledger     posting, FIFO, views, restatement
-internal/store      CockroachDB
+internal/store      CockroachDB (pool retries proxy deny once)
+internal/crdballowlist  Cloud Run SQL IP allowlist
 internal/mongo      settings, flags, cache, ECB prints
 internal/httpapi    JSON API
 internal/auth       session cookie and allowlist
